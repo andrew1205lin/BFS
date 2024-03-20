@@ -3,7 +3,7 @@
 #include "color.h"
 #include "utils.cuh"
 
-constexpr int NUM_BFS = 10000;
+constexpr int NUM_BFS = 100;
 constexpr int BLOCK_SIZE = 1024;
 constexpr int NUM_BLOCKS = 1;
 
@@ -73,7 +73,9 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
       /*for(int v=tid;v<*Fa_len;v+=blockDim.x){
         printf("tid %d: v=%d, Fa[v] = %d\n", tid, v, Fa[v]);
       }*/
+      
       level+=1;
+      //if(tid == 0) printf("level %d\n", level);
       __syncthreads(); //?
     }
 
@@ -91,6 +93,12 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
 
 
 int main(int argc, char **argv) {
+  // start_vertex~end_vertex
+  if (argc != 4) {
+    std::cerr << "Usage: " << argv[0] << " <csr_binary_file> <start_vertex> <end_vertex>" << std::endl;
+    return 1;
+  }
+
   // read csr file
   std::string csr_binary_file = std::string(argv[1]);
   CSRGraph csr;
@@ -101,6 +109,9 @@ int main(int argc, char **argv) {
     std::cout << Color::kBgLightRed << "No binary file found..." << std::endl;
   }
 
+  //  should be equal to 10000
+  int start_vertex = std::stoi(argv[2]);
+  int end_vertex = std::stoi(argv[3]);
 
   // allocate GPU memory
   int* d_offsets;
@@ -115,7 +126,7 @@ int main(int argc, char **argv) {
   int* d_distance;
   std::vector<int> h_source_vector(NUM_BFS);
   for (int i = 0; i < NUM_BFS; ++i) {
-    h_source_vector[i] = i;
+    h_source_vector[i] = start_vertex + i;
   }
 
 
@@ -180,7 +191,8 @@ int main(int argc, char **argv) {
   cudaFree(d_distance);
 
   // write the result
-  std::ofstream outfile("output.txt");
+  std::string filename = "./com-orkut/output_" + std::to_string(start_vertex) + "_" + std::to_string(end_vertex) + ".txt";
+  std::ofstream outfile(filename);
   if (!outfile.is_open()){
     std::cerr << "Error opening output file." << std::endl;
     return 1;
