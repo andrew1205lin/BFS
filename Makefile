@@ -1,6 +1,6 @@
 CXX = g++
 NVCC = nvcc
-ARCH = sm_86
+ARCH = sm_61
 
 # Common Flags
 COMMON_FLAGS = -std=c++17
@@ -22,7 +22,7 @@ OBJECTS = graph.o mmio.o
 DEPS = $(OBJECTS:.o=.d)
 
 # Targets
-TARGETS = gpubfs gpubfs_blockactive 
+TARGETS = gpubfs gpubfs_blockactive gpubfs_ultrafinegrained 
 
 # Default build set to Release
 BUILD = release
@@ -51,6 +51,9 @@ gpubfs: gpubfs.cu $(OBJECTS)
 	$(NVCC) $(NVCCFLAGS) $^ $(LIBS) -o $@
 
 gpubfs_blockactive: gpubfs_blockactive.cu $(OBJECTS)
+	$(NVCC) $(NVCCFLAGS) $^ $(LIBS) -o $@
+
+gpubfs_ultrafinegrained: gpubfs_ultrafinegrained.cu $(OBJECTS)
 	$(NVCC) $(NVCCFLAGS) $^ $(LIBS) -o $@
 
 %.o: %.cpp

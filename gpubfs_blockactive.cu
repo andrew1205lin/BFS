@@ -8,8 +8,8 @@
 
 namespace cg = cooperative_groups;
 
-constexpr int NUM_BFS = 10;
-constexpr int BLOCK_SIZE = 1024;
+constexpr int NUM_BFS = 100;
+constexpr int BLOCK_SIZE = 32;
 constexpr int NUM_BLOCKS = 1;
 
 template<typename T>
@@ -35,7 +35,7 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
   int bid = blockIdx.x;
   
   for(int u=0;u<NUM_BFS;u++){ // choose source u
-    //if(tid == 0) printf("source[u] = %d\n", source[u]);
+    //if(tid == 0 && bid == 0) printf("source[u] = %d\n", source[u]);
     // initialization for BFS in this round 
     setArray(Fa, 0, num_nodes);
     setArray(Sa, -1, num_nodes);
@@ -62,8 +62,8 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
           start = offsets[frontier];
           end = offsets[frontier+1];          
         }
-        //printf("tid %d: frontier %d\n", tid, frontier);
         __syncthreads();
+        //printf("bid: %d, tid %d: frontier %d\n", bid, tid, frontier);
 
         for(int w_idx=start+tid;w_idx<end;w_idx+=blockDim.x){ 
           int w=destinations[w_idx];
@@ -78,9 +78,9 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
 
       // Scan the status array and generate new frontier queue
       
-      for(int v=tid*blockDim.x+bid;v<num_nodes;v+=blockDim.x*gridDim.x){
+      for(int v=tid+blockDim.x*bid;v<num_nodes;v+=blockDim.x*gridDim.x){
         if(Sa[v] == level+1){
-          //printf("tid %d: v=%d, Sa[v] = %d\n", tid, v, Sa[v]);
+          //printf("bid %d, tid %d: v=%d, Sa[v] = %d\n", bid, tid, v, Sa[v]);
           int index = atomicAdd(Fa_len, 1);
           Fa[index] = v;
         } 

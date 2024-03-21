@@ -11,7 +11,11 @@ amazon0302/
 *.txt
 *.o
 *.sh
+test/
+*.tet
+*.bin
 gpubfs
 gpubfs_blockactive
+gpubfs_ultrafinegrained
 
 ./super_source_sink_20pairs /home/andrew/BFSgpu/data/processed/p2p-Gnutella04/p2p-Gnutella04_processed.txt /home/andrew/BFSgpu/p2p-Gnutella04/20pairs.txt /home/andrew/BFSgpu/data/source_sink_pairs/SNAP/p2p-Gnutella04

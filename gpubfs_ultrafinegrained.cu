@@ -47,7 +47,28 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
     while(*Fa_len!=0){
       //if(tid == 0) printf("*Fa_len = %d\n", *Fa_len);
       // update status array with Vs in Frontier queue 
-      for(int v=tid;v<*Fa_len;v+=blockDim.x){
+      int now = 0; //current index in Fa
+      int end = *Fa_len;
+      int workid = tid; 
+      while (now < end){ //still have work in Fa
+        int frontier = Fa[now];
+        int frontier_start = offsets[frontier];
+        int frontier_degree = offsets[frontier + 1] - frontier_start;
+        while (now < end && workid >= frontier_degree) {
+          now++;
+          workid -= frontier_degree;
+          frontier = Fa[now];
+          frontier_start = offsets[frontier];
+          frontier_degree = offsets[frontier + 1] - frontier_start;
+        }
+        if (now < end) {
+          //printf("tid %d: frontier %d\n", tid, frontier);
+          int w = destinations[frontier_start + workid];
+          if(Sa[w]==-1) Sa[w]=level+1;
+        }
+        workid += blockDim.x;
+      }
+      /*for(int v=tid;v<*Fa_len;v+=blockDim.x){
         int frontier = Fa[v];
         int start = offsets[frontier];
         int end = offsets[frontier+1];
@@ -58,8 +79,10 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
           if(Sa[w]==-1) Sa[w]=level+1;
           //printf("tid %d: w=%d, Sa[w] = %d\n", tid, w, Sa[w]);
         }
-      }
+      }*/
       __syncthreads(); //make sure status array are updated
+      
+      
       if(tid == 0) *Fa_len=0;
       __syncthreads(); //make sure Fa_len are updated
 
