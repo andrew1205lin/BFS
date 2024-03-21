@@ -3,15 +3,19 @@
 #include "color.h"
 #include "utils.cuh"
 #include <cassert>
+#include <cooperative_groups.h>
+#include <cuda_runtime_api.h>
 
-constexpr int NUM_BFS = 10000;
+namespace cg = cooperative_groups;
+
+constexpr int NUM_BFS = 10;
 constexpr int BLOCK_SIZE = 1024;
 constexpr int NUM_BLOCKS = 1;
 
 template<typename T>
 __device__ void setArray(T* array, T value, int array_len) {
-    int tid = threadIdx.x;//threadIdx.x + blockIdx.x * blockDim.x;
-    for(int u=tid;u<array_len;u+=blockDim.x){
+    int lane = threadIdx.x + blockIdx.x * blockDim.x;
+    for(int u=lane;u<array_len;u+=gridDim.x){
         array[u] = value;
     }
 }
@@ -26,46 +30,55 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
   Xa: Visited array (len: #vertex) 
   Ca: Cost array    (len: #vertex)
   */
-  int tid = threadIdx.x ;//+ blockIdx.x * blockDim.x;
+  cg::grid_group grid = cg::this_grid();
+  int tid = threadIdx.x;//+ blockIdx.x * blockDim.x;
+  int bid = blockIdx.x;
   
   for(int u=0;u<NUM_BFS;u++){ // choose source u
     //if(tid == 0) printf("source[u] = %d\n", source[u]);
     // initialization for BFS in this round 
     setArray(Fa, 0, num_nodes);
     setArray(Sa, -1, num_nodes);
-    __syncthreads(); // without this, Sa[source[u]] might be overwrite to -1, Fa[0] should be ok since tid[0] must 
-    if(tid == 0){
+    grid.sync();
+    if(tid == 0 && bid == 0){
       *Fa_len = 0;
       Sa[source[u]] = 0;
       Fa[*Fa_len] = source[u];
       atomicAdd(Fa_len, 1);
     } 
-    __syncthreads();
+    grid.sync();
 
     // do until Fa_len==0;
     int level=0;
     while(*Fa_len!=0){
       //if(tid == 0) printf("*Fa_len = %d\n", *Fa_len);
       // update status array with Vs in Frontier queue 
-      for(int v=tid;v<*Fa_len;v+=blockDim.x){
-        int frontier = Fa[v];
-        int start = offsets[frontier];
-        int end = offsets[frontier+1];
+      for(int v=bid;v<*Fa_len;v+=gridDim.x){
+        __shared__ int frontier;
+        __shared__ int start;
+        __shared__ int end;
+        if(tid == 0){
+          frontier = Fa[v];
+          start = offsets[frontier];
+          end = offsets[frontier+1];          
+        }
         //printf("tid %d: frontier %d\n", tid, frontier);
+        __syncthreads();
 
-        for(int w_idx=start;w_idx<end;w_idx++){ // each thread for one frontier
+        for(int w_idx=start+tid;w_idx<end;w_idx+=blockDim.x){ 
           int w=destinations[w_idx];
           if(Sa[w]==-1) Sa[w]=level+1;
           //printf("tid %d: w=%d, Sa[w] = %d\n", tid, w, Sa[w]);
         }
+        __syncthreads();
       }
-      __syncthreads(); //make sure status array are updated
-      if(tid == 0) *Fa_len=0;
-      __syncthreads(); //make sure Fa_len are updated
+      grid.sync(); //make sure status array are updated
+      if(tid == 0 && bid == 0) *Fa_len=0;
+      grid.sync(); //make sure Fa_len are updated
 
       // Scan the status array and generate new frontier queue
       
-      for(int v=tid;v<num_nodes;v+=blockDim.x){
+      for(int v=tid*blockDim.x+bid;v<num_nodes;v+=blockDim.x*gridDim.x){
         if(Sa[v] == level+1){
           //printf("tid %d: v=%d, Sa[v] = %d\n", tid, v, Sa[v]);
           int index = atomicAdd(Fa_len, 1);
@@ -79,13 +92,13 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
       
       level+=1;
       //if(tid == 0) printf("level %d\n", level);
-      __syncthreads(); // without this, next level setArray is call before this level complete.
+      grid.sync(); //?
     }
-    if(tid == 0){
+    if(tid == 0 && bid == 0){
       sink[u] = Fa[0];
       distance[u] = level-1;
     }
-    __syncthreads();// without this, another BFS u would start too soon
+    grid.sync();// if this line is miss, another BFS u would start too soon
   }
 
   /*for(int v=tid;v<NUM_BFS;v+=blockDim.x){
@@ -95,6 +108,26 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
   return ;
 }
 
+/*__global__ void my_kernel(int* result)
+{
+    __shared__ int sum;
+    sum = 0;
+    
+    for (int i = threadIdx.x; i < 10; i += blockDim.x)
+    { 
+      atomicAdd(&sum, i);
+    }
+    
+    // 同步所有 block 中的 thread
+    cg::grid_group grid = cg::this_grid();
+    grid.sync();
+
+    if (threadIdx.x == 0)
+    {
+        
+        atomicAdd(result, sum);
+    }
+}*/
 
 int main(int argc, char **argv) {
   // start_vertex~end_vertex
@@ -166,11 +199,19 @@ int main(int argc, char **argv) {
   float totalMilliseconds = 0.0f;
   CudaTimer timer;
 
+  dim3 grid(NUM_BLOCKS);
+  dim3 block(BLOCK_SIZE);
+  void* args[] = {&csr.num_nodes, &d_offsets, &d_destinations, 
+        &d_frontier_queue, &d_queue_length, &d_status_array,
+        &d_source, &d_sink, &d_distance};
+
   timer.start();
-  cudaBFS<<<NUM_BLOCKS, BLOCK_SIZE>>>(
+  /*cudaBFS<<<NUM_BLOCKS, BLOCK_SIZE>>>(
         csr.num_nodes, d_offsets, d_destinations,
         d_frontier_queue, d_queue_length, d_status_array,
-        d_source, d_sink, d_distance);
+        d_source, d_sink, d_distance);*/
+  cudaLaunchCooperativeKernel((void*)cudaBFS, grid, block, 
+        args);
   timer.stop();
   
   CHECK(cudaGetLastError());
@@ -218,5 +259,34 @@ int main(int argc, char **argv) {
   }
 
   outfile.close();  // Close the file
+  
+
+  /*
+  int dev = 0;
+  cudaDeviceProp deviceProp;
+  cudaGetDeviceProperties(&deviceProp, dev);
+  // initialize, then launch
+  printf("deviceProp.multiProcessorCount: %d", deviceProp.multiProcessorCount);
+  dim3 grid(deviceProp.multiProcessorCount);
+  dim3 block(BLOCK_SIZE);
+
+  int result = 0;
+  int* d_result;
+
+  cudaMalloc(&d_result, sizeof(int));
+  cudaMemcpy(d_result, &result, sizeof(int), cudaMemcpyHostToDevice);
+
+  void* args[] = {&d_result};
+  cudaLaunchCooperativeKernel((void*)my_kernel, grid, block, args);
+
+  cudaDeviceSynchronize();
+
+  cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+
+  std::cout << "Result: " << result << std::endl;
+
+  cudaFree(d_result);
+  */
+  
   return 0;
 }

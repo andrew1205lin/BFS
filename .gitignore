@@ -3,9 +3,15 @@ data/
 roadNet_CA/
 com-orkut/
 web-BerkStan/
+p2p-Gnutella04/
+ca-HepTh/
+ca-HepPh/
+amazon0302/
 *.d
 *.txt
 *.o
 *.sh
 gpubfs
+gpubfs_blockactive
 
+./super_source_sink_20pairs /home/andrew/BFSgpu/data/processed/p2p-Gnutella04/p2p-Gnutella04_processed.txt /home/andrew/BFSgpu/p2p-Gnutella04/20pairs.txt /home/andrew/BFSgpu/data/source_sink_pairs/SNAP/p2p-Gnutella04

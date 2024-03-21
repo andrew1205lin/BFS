@@ -22,7 +22,7 @@ OBJECTS = graph.o mmio.o
 DEPS = $(OBJECTS:.o=.d)
 
 # Targets
-TARGETS = gpubfs 
+TARGETS = gpubfs gpubfs_blockactive 
 
 # Default build set to Release
 BUILD = release
@@ -48,6 +48,9 @@ release:
 	$(MAKE) BUILD=release
 
 gpubfs: gpubfs.cu $(OBJECTS)
+	$(NVCC) $(NVCCFLAGS) $^ $(LIBS) -o $@
+
+gpubfs_blockactive: gpubfs_blockactive.cu $(OBJECTS)
 	$(NVCC) $(NVCCFLAGS) $^ $(LIBS) -o $@
 
 %.o: %.cpp
