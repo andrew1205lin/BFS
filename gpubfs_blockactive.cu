@@ -8,9 +8,9 @@
 
 namespace cg = cooperative_groups;
 
-constexpr int NUM_BFS = 10;
-constexpr int BLOCK_SIZE = 1024;
-constexpr int NUM_BLOCKS = 1;
+constexpr int NUM_BFS = 10000;
+constexpr int BLOCK_SIZE = 32;
+constexpr int NUM_BLOCKS = 512;
 
 template<typename T>
 __device__ void setArray(T* array, T value, int array_len) {
@@ -78,7 +78,7 @@ __global__ void cudaBFS(int num_nodes, const int* offsets,
 
       // Scan the status array and generate new frontier queue
       
-      for(int v=tid*blockDim.x+bid;v<num_nodes;v+=blockDim.x*gridDim.x){
+      for(int v=tid+blockDim.x*bid;v<num_nodes;v+=blockDim.x*gridDim.x){
         if(Sa[v] == level+1){
           //printf("tid %d: v=%d, Sa[v] = %d\n", tid, v, Sa[v]);
           int index = atomicAdd(Fa_len, 1);
@@ -154,139 +154,147 @@ int main(int argc, char **argv) {
     assert(csr == graph2);
   }
 
-  //  should be equal to 10000
-  int start_vertex = std::stoi(argv[3]);
-  int end_vertex = std::stoi(argv[4]);
+  //  should be equal to 1000
+  int start_vertex;
+  int end_vertex;
+  int DATASET_VERTEX=1134890;
 
-  // allocate GPU memory
-  int* d_offsets;
-  int* d_destinations;
+  for (start_vertex = std::stoi(argv[3]); start_vertex < DATASET_VERTEX;
+       start_vertex += 10000) {
+    end_vertex = start_vertex + NUM_BFS - 1;
+    std::cout << "On-going.." << int((start_vertex / float(DATASET_VERTEX)) * 100.0)
+              << " %\r";
+    std::cout.flush();
 
-  int* d_frontier_queue;
-  int* d_queue_length;
-  int* d_status_array; // or distance_array
+    // allocate GPU memory
+    int* d_offsets;
+    int* d_destinations;
 
-  int* d_source;
-  int* d_sink;
-  int* d_distance;
-  std::vector<int> h_source_vector(NUM_BFS);
-  for (int i = 0; i < NUM_BFS; ++i) {
-    h_source_vector[i] = start_vertex + i;
+    int* d_frontier_queue;
+    int* d_queue_length;
+    int* d_status_array; // or distance_array
+
+    int* d_source;
+    int* d_sink;
+    int* d_distance;
+    std::vector<int> h_source_vector(NUM_BFS);
+    for (int i = 0; i < NUM_BFS; ++i) {
+      h_source_vector[i] = start_vertex + i;
+    }
+
+
+    CHECK(cudaMalloc(&d_offsets, csr.offsets.size() * sizeof(int)));
+    CHECK(cudaMemcpy(d_offsets, csr.offsets.data(), 
+                    csr.offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
+
+    CHECK(cudaMalloc(&d_destinations, csr.destinations.size() * sizeof(int)));
+    CHECK(cudaMemcpy(d_destinations, csr.destinations.data(),
+                    csr.destinations.size() * sizeof(int),
+                    cudaMemcpyHostToDevice));
+
+    CHECK(cudaMalloc(&d_frontier_queue, sizeof(int) * csr.num_nodes));
+    CHECK(cudaMalloc(&d_queue_length, sizeof(int)));
+    CHECK(cudaMalloc(&d_status_array, sizeof(int) * csr.num_nodes));
+
+    CHECK(cudaMalloc(&d_source, sizeof(int) * NUM_BFS));
+    CHECK(cudaMalloc(&d_sink, sizeof(int) * NUM_BFS));
+    CHECK(cudaMalloc(&d_distance, sizeof(int) * NUM_BFS));
+    CHECK(cudaMemcpy(d_source, h_source_vector.data(), 
+                    NUM_BFS*sizeof(int), cudaMemcpyHostToDevice));
+
+
+    // run the kernel
+    float totalMilliseconds = 0.0f;
+    CudaTimer timer;
+
+    dim3 grid(NUM_BLOCKS);
+    dim3 block(BLOCK_SIZE);
+    void* args[] = {&csr.num_nodes, &d_offsets, &d_destinations, 
+          &d_frontier_queue, &d_queue_length, &d_status_array,
+          &d_source, &d_sink, &d_distance};
+
+    timer.start();
+    /*cudaBFS<<<NUM_BLOCKS, BLOCK_SIZE>>>(
+          csr.num_nodes, d_offsets, d_destinations,
+          d_frontier_queue, d_queue_length, d_status_array,
+          d_source, d_sink, d_distance);*/
+    cudaLaunchCooperativeKernel((void*)cudaBFS, grid, block, 
+          args);
+    timer.stop();
+    
+    CHECK(cudaGetLastError());
+    std::cout << "cudaBFS Kernel execution time: " << Color::kYellow
+              << timer.elapsed() << " ms\n";
+    totalMilliseconds += timer.elapsed();
+
+    CHECK(cudaDeviceSynchronize());
+
+
+    // copy the result from GPU
+    int h_source[NUM_BFS];
+    int h_sink[NUM_BFS];
+    int h_distance[NUM_BFS];
+    CHECK(cudaMemcpy(&h_source, d_source, sizeof(int) * NUM_BFS, 
+                    cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(&h_sink, d_sink, sizeof(int) * NUM_BFS, 
+                    cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(&h_distance, d_distance, sizeof(int) * NUM_BFS, 
+                    cudaMemcpyDeviceToHost));
+
+    // free GPU memory
+    cudaFree(d_destinations);
+    cudaFree(d_offsets);
+    cudaFree(d_frontier_queue);
+    cudaFree(d_queue_length);
+    cudaFree(d_status_array);
+    cudaFree(d_source);
+    cudaFree(d_sink);
+    cudaFree(d_distance);
+
+    // write the result
+    std::string filename = std::string(argv[2]) + "/output_" + std::to_string(start_vertex) + "_" + std::to_string(end_vertex) + ".txt";
+    std::ofstream outfile(filename);
+    if (!outfile.is_open()){
+      std::cerr << "Error opening output file." << std::endl;
+      return 1;
+    }
+
+    for(int i=0;i<NUM_BFS;i++){
+      outfile << "source = " << h_source[i] 
+              << ", sink = " << h_sink[i] 
+              << ", distance = " << h_distance[i] 
+              << std::endl;
+    }
+
+    outfile.close();  // Close the file
+    
+
+    /*
+    int dev = 0;
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, dev);
+    // initialize, then launch
+    printf("deviceProp.multiProcessorCount: %d", deviceProp.multiProcessorCount);
+    dim3 grid(deviceProp.multiProcessorCount);
+    dim3 block(BLOCK_SIZE);
+
+    int result = 0;
+    int* d_result;
+
+    cudaMalloc(&d_result, sizeof(int));
+    cudaMemcpy(d_result, &result, sizeof(int), cudaMemcpyHostToDevice);
+
+    void* args[] = {&d_result};
+    cudaLaunchCooperativeKernel((void*)my_kernel, grid, block, args);
+
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+
+    std::cout << "Result: " << result << std::endl;
+
+    cudaFree(d_result);
+    */
   }
-
-
-  CHECK(cudaMalloc(&d_offsets, csr.offsets.size() * sizeof(int)));
-  CHECK(cudaMemcpy(d_offsets, csr.offsets.data(), 
-                   csr.offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
-
-  CHECK(cudaMalloc(&d_destinations, csr.destinations.size() * sizeof(int)));
-  CHECK(cudaMemcpy(d_destinations, csr.destinations.data(),
-                   csr.destinations.size() * sizeof(int),
-                   cudaMemcpyHostToDevice));
-
-  CHECK(cudaMalloc(&d_frontier_queue, sizeof(int) * csr.num_nodes));
-  CHECK(cudaMalloc(&d_queue_length, sizeof(int)));
-  CHECK(cudaMalloc(&d_status_array, sizeof(int) * csr.num_nodes));
-
-  CHECK(cudaMalloc(&d_source, sizeof(int) * NUM_BFS));
-  CHECK(cudaMalloc(&d_sink, sizeof(int) * NUM_BFS));
-  CHECK(cudaMalloc(&d_distance, sizeof(int) * NUM_BFS));
-  CHECK(cudaMemcpy(d_source, h_source_vector.data(), 
-                   NUM_BFS*sizeof(int), cudaMemcpyHostToDevice));
-
-
-  // run the kernel
-  float totalMilliseconds = 0.0f;
-  CudaTimer timer;
-
-  dim3 grid(NUM_BLOCKS);
-  dim3 block(BLOCK_SIZE);
-  void* args[] = {&csr.num_nodes, &d_offsets, &d_destinations, 
-        &d_frontier_queue, &d_queue_length, &d_status_array,
-        &d_source, &d_sink, &d_distance};
-
-  timer.start();
-  /*cudaBFS<<<NUM_BLOCKS, BLOCK_SIZE>>>(
-        csr.num_nodes, d_offsets, d_destinations,
-        d_frontier_queue, d_queue_length, d_status_array,
-        d_source, d_sink, d_distance);*/
-  cudaLaunchCooperativeKernel((void*)cudaBFS, grid, block, 
-        args);
-  timer.stop();
-  
-  CHECK(cudaGetLastError());
-  std::cout << "cudaBFS Kernel execution time: " << Color::kYellow
-            << timer.elapsed() << " ms\n";
-  totalMilliseconds += timer.elapsed();
-
-  CHECK(cudaDeviceSynchronize());
-
-
-  // copy the result from GPU
-  int h_source[NUM_BFS];
-  int h_sink[NUM_BFS];
-  int h_distance[NUM_BFS];
-  CHECK(cudaMemcpy(&h_source, d_source, sizeof(int) * NUM_BFS, 
-                  cudaMemcpyDeviceToHost));
-  CHECK(cudaMemcpy(&h_sink, d_sink, sizeof(int) * NUM_BFS, 
-                  cudaMemcpyDeviceToHost));
-  CHECK(cudaMemcpy(&h_distance, d_distance, sizeof(int) * NUM_BFS, 
-                  cudaMemcpyDeviceToHost));
-
-  // free GPU memory
-  cudaFree(d_destinations);
-  cudaFree(d_offsets);
-  cudaFree(d_frontier_queue);
-  cudaFree(d_queue_length);
-  cudaFree(d_status_array);
-  cudaFree(d_source);
-  cudaFree(d_sink);
-  cudaFree(d_distance);
-
-  // write the result
-  std::string filename = std::string(argv[2]) + "/output_" + std::to_string(start_vertex) + "_" + std::to_string(end_vertex) + ".txt";
-  std::ofstream outfile(filename);
-  if (!outfile.is_open()){
-    std::cerr << "Error opening output file." << std::endl;
-    return 1;
-  }
-
-  for(int i=0;i<NUM_BFS;i++){
-    outfile << "source = " << h_source[i] 
-            << ", sink = " << h_sink[i] 
-            << ", distance = " << h_distance[i] 
-            << std::endl;
-  }
-
-  outfile.close();  // Close the file
-  
-
-  /*
-  int dev = 0;
-  cudaDeviceProp deviceProp;
-  cudaGetDeviceProperties(&deviceProp, dev);
-  // initialize, then launch
-  printf("deviceProp.multiProcessorCount: %d", deviceProp.multiProcessorCount);
-  dim3 grid(deviceProp.multiProcessorCount);
-  dim3 block(BLOCK_SIZE);
-
-  int result = 0;
-  int* d_result;
-
-  cudaMalloc(&d_result, sizeof(int));
-  cudaMemcpy(d_result, &result, sizeof(int), cudaMemcpyHostToDevice);
-
-  void* args[] = {&d_result};
-  cudaLaunchCooperativeKernel((void*)my_kernel, grid, block, args);
-
-  cudaDeviceSynchronize();
-
-  cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
-
-  std::cout << "Result: " << result << std::endl;
-
-  cudaFree(d_result);
-  */
-  
   return 0;
 }
